@@ -17,23 +17,27 @@ func MakeThreadTracker() *ThreadTracker {
 }
 
 // TriggerGoroutine initiates a new goroutine while tracking it
-// typical usage:
-//     threadTracker.TriggerGoroutine(func() {
+// typical usage 1:
+//     threadTracker.TriggerGoroutine(func(inputs []interface{}) {
 //         fmt.Printf("Hello %s\n", "World")
 //     })
-func (t *ThreadTracker) TriggerGoroutine(fn func()) {
-	t.TriggerGoroutineWithDefers(fn, nil)
+// typical usage 2:
+//     threadTracker.TriggerGoroutine(func(inputs []interface{}) {
+//         fmt.Printf("Hello %s\n", inputs[0])
+//     }, "World")
+func (t *ThreadTracker) TriggerGoroutine(fn func(inputs []interface{}), inputs []interface{}) {
+	t.TriggerGoroutineWithDefers(nil, fn, inputs)
 }
 
 // TriggerGoroutineWithDefers initiates a new goroutine while tracking it
 // typical usage:
-//     threadTracker.TriggerGoroutine(func() {
-//         fmt.Printf("Hello %s -- this should appear first\n", "World")
-//     }, []func(){
+//     threadTracker.TriggerGoroutineWithDefers([]func(){
 // 	       func() { fmt.Printf("this should appear third\n") },
 // 	       func() { fmt.Printf("this should appear second\n") },
+//     }, func(inputs []interface{}) {
+//         fmt.Printf("Hello %s -- this should appear first\n", "World")
 //     })
-func (t *ThreadTracker) TriggerGoroutineWithDefers(fn func(), deferredFns []func()) {
+func (t *ThreadTracker) TriggerGoroutineWithDefers(deferredFns []func(), fn func(inputs []interface{}), inputs []interface{}) {
 	t.activeThreadsCounter.Add(1)
 
 	go func() {
@@ -47,7 +51,7 @@ func (t *ThreadTracker) TriggerGoroutineWithDefers(fn func(), deferredFns []func
 			}
 		}
 
-		fn()
+		fn(inputs)
 	}()
 }
 

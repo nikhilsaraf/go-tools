@@ -2,6 +2,7 @@ package multithreading
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,22 +12,22 @@ import (
 func TestThreadTracker_TriggerGoroutine(t *testing.T) {
 	var counter int8
 	testCases := []struct {
-		fns  []func()
+		fns  []func(inputs []interface{})
 		want int8
 	}{
 		{
-			fns: []func(){
-				func() {
+			fns: []func(inputs []interface{}){
+				func(inputs []interface{}) {
 					counter = 1
 				},
 			},
 			want: 1,
 		}, {
-			fns: []func(){
-				func() {
+			fns: []func(inputs []interface{}){
+				func(inputs []interface{}) {
 					counter = 2
 				},
-				func() {
+				func(inputs []interface{}) {
 					// this will execute last because of the sleep
 					time.Sleep(time.Duration(250) * time.Millisecond)
 					counter = 1
@@ -34,13 +35,13 @@ func TestThreadTracker_TriggerGoroutine(t *testing.T) {
 			},
 			want: 1,
 		}, {
-			fns: []func(){
-				func() {
+			fns: []func(inputs []interface{}){
+				func(inputs []interface{}) {
 					time.Sleep(time.Duration(250) * time.Millisecond)
 					// this will execute last because of the sleep
 					counter = 2
 				},
-				func() {
+				func(inputs []interface{}) {
 					counter = 1
 				},
 			},
@@ -54,12 +55,32 @@ func TestThreadTracker_TriggerGoroutine(t *testing.T) {
 			threadTracker := MakeThreadTracker()
 
 			for _, fn := range kase.fns {
-				threadTracker.TriggerGoroutine(fn)
+				threadTracker.TriggerGoroutine(fn, nil)
 			}
 			threadTracker.Wait()
 			assert.Equal(t, kase.want, counter)
 		})
 	}
+}
+
+func TestThreadTracker_TriggerGoroutine_Values(t *testing.T) {
+	values := []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+	m := map[int]bool{}
+	threadTracker := MakeThreadTracker()
+	mutex := &sync.Mutex{}
+
+	for _, v := range values {
+		threadTracker.TriggerGoroutine(func(inputs []interface{}) {
+			v := inputs[0].(int)
+
+			mutex.Lock()
+			m[v] = true
+			mutex.Unlock()
+		}, []interface{}{v})
+	}
+
+	threadTracker.Wait()
+	assert.Equal(t, 10, len(m))
 }
 
 func TestThreadTracker_TriggerGoroutineWithDefers(t *testing.T) {
@@ -100,9 +121,13 @@ func TestThreadTracker_TriggerGoroutineWithDefers(t *testing.T) {
 			counter = -1
 			threadTracker := MakeThreadTracker()
 
-			threadTracker.TriggerGoroutineWithDefers(func() {
-				counter = 10
-			}, kase.defers)
+			threadTracker.TriggerGoroutineWithDefers(
+				kase.defers,
+				func(inputs []interface{}) {
+					counter = 10
+				},
+				nil,
+			)
 			threadTracker.Wait()
 			assert.Equal(t, kase.want, counter)
 		})
@@ -164,9 +189,13 @@ func TestThreadTracker_panic(t *testing.T) {
 			counter = -1
 			threadTracker := MakeThreadTracker()
 
-			threadTracker.TriggerGoroutineWithDefers(func() {
-				panic("some error")
-			}, kase.defers)
+			threadTracker.TriggerGoroutineWithDefers(
+				kase.defers,
+				func(inputs []interface{}) {
+					panic("some error")
+				},
+				nil,
+			)
 			threadTracker.Wait()
 			assert.Equal(t, kase.want, counter)
 		})

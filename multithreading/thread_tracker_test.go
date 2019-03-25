@@ -55,7 +55,10 @@ func TestThreadTracker_TriggerGoroutine(t *testing.T) {
 			threadTracker := MakeThreadTracker()
 
 			for _, fn := range kase.fns {
-				threadTracker.TriggerGoroutine(fn, nil)
+				e := threadTracker.TriggerGoroutine(fn, nil)
+				if !assert.NoError(t, e) {
+					return
+				}
 			}
 			threadTracker.Wait()
 			assert.Equal(t, kase.want, counter)
@@ -70,13 +73,16 @@ func TestThreadTracker_TriggerGoroutine_Values(t *testing.T) {
 	mutex := &sync.Mutex{}
 
 	for _, v := range values {
-		threadTracker.TriggerGoroutine(func(inputs []interface{}) {
+		e := threadTracker.TriggerGoroutine(func(inputs []interface{}) {
 			v := inputs[0].(int)
 
 			mutex.Lock()
 			m[v] = true
 			mutex.Unlock()
 		}, []interface{}{v})
+		if !assert.NoError(t, e) {
+			return
+		}
 	}
 
 	threadTracker.Wait()
@@ -121,13 +127,17 @@ func TestThreadTracker_TriggerGoroutineWithDefers(t *testing.T) {
 			counter = -1
 			threadTracker := MakeThreadTracker()
 
-			threadTracker.TriggerGoroutineWithDefers(
+			e := threadTracker.TriggerGoroutineWithDefers(
 				kase.defers,
 				func(inputs []interface{}) {
 					counter = 10
 				},
 				nil,
 			)
+			if !assert.NoError(t, e) {
+				return
+			}
+
 			threadTracker.Wait()
 			assert.Equal(t, kase.want, counter)
 		})
@@ -189,15 +199,141 @@ func TestThreadTracker_panic(t *testing.T) {
 			counter = -1
 			threadTracker := MakeThreadTracker()
 
-			threadTracker.TriggerGoroutineWithDefers(
+			e := threadTracker.TriggerGoroutineWithDefers(
 				kase.defers,
 				func(inputs []interface{}) {
 					panic("some error")
 				},
 				nil,
 			)
+			if !assert.NoError(t, e) {
+				return
+			}
+
 			threadTracker.Wait()
 			assert.Equal(t, kase.want, counter)
+		})
+	}
+}
+
+func TestThreadTracker_NumActiveThreads(t *testing.T) {
+	testCases := []struct {
+		numFns int
+		want   uint64
+	}{
+		{
+			numFns: 0,
+			want:   0,
+		}, {
+			numFns: 1,
+			want:   1,
+		}, {
+			numFns: 2,
+			want:   2,
+		},
+	}
+
+	for _, kase := range testCases {
+		t.Run(fmt.Sprintf("%d", kase.numFns), func(t *testing.T) {
+			threadTracker := MakeThreadTracker()
+
+			mutex := &sync.Mutex{}
+			mutex.Lock()
+			for i := 0; i < kase.numFns; i++ {
+				e := threadTracker.TriggerGoroutine(func(inputs []interface{}) {
+					mutex.Lock() // blocking call
+					mutex.Unlock()
+				}, nil)
+				if !assert.NoError(t, e) {
+					mutex.Unlock()
+					return
+				}
+			}
+			if !assert.Equal(t, kase.want, threadTracker.NumActiveThreads()) {
+				mutex.Unlock()
+				return
+			}
+
+			mutex.Unlock()
+			threadTracker.Wait()
+			if !assert.Equal(t, uint64(0), threadTracker.NumActiveThreads()) {
+				return
+			}
+		})
+	}
+}
+
+func TestThreadTracker_Stop(t *testing.T) {
+	testCases := []struct {
+		stopMode  StopMode
+		nThreads  uint64
+		wantError bool
+	}{
+		{
+			stopMode:  StopModeNoop,
+			nThreads:  0,
+			wantError: false,
+		}, {
+			stopMode:  StopModeNoop,
+			nThreads:  1,
+			wantError: false,
+		}, {
+			stopMode:  StopModeNoop,
+			nThreads:  2,
+			wantError: false,
+		}, {
+			stopMode:  StopModeError,
+			nThreads:  0,
+			wantError: true,
+		}, {
+			stopMode:  StopModeError,
+			nThreads:  1,
+			wantError: true,
+		}, {
+			stopMode:  StopModeError,
+			nThreads:  2,
+			wantError: true,
+		},
+	}
+
+	for _, kase := range testCases {
+		t.Run(fmt.Sprintf("%v", kase.stopMode), func(t *testing.T) {
+			threadTracker := MakeThreadTracker()
+			mutex := &sync.Mutex{}
+			mutex.Lock()
+			blockingFn := func(inputs []interface{}) {
+				mutex.Lock() // blocking call
+				mutex.Unlock()
+			}
+
+			// spin up number of prerequisite threads
+			for i := 0; uint64(i) < kase.nThreads; i++ {
+				e := threadTracker.TriggerGoroutine(blockingFn, nil)
+				if !assert.NoError(t, e) {
+					mutex.Unlock()
+					return
+				}
+			}
+			// sanity check
+			if !assert.Equal(t, kase.nThreads, threadTracker.NumActiveThreads()) {
+				mutex.Unlock()
+				return
+			}
+
+			// run stop command and validate if there's an error or not
+			threadTracker.Stop(kase.stopMode)
+			e := threadTracker.TriggerGoroutine(blockingFn, nil)
+			if kase.wantError && !assert.Error(t, e) {
+				mutex.Unlock()
+				return
+			} else if !kase.wantError && !assert.NoError(t, e) {
+				mutex.Unlock()
+				return
+			}
+
+			// cleanup
+			mutex.Unlock()
+			threadTracker.Wait()
 		})
 	}
 }
